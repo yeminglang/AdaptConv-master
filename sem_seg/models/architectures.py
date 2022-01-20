@@ -1,4 +1,3 @@
-
 from models.blocks import *
 import numpy as np
 
@@ -12,7 +11,7 @@ class Net(nn.Module):
         super(Net, self).__init__()
 
         ############
-        # Parameters
+        # Parameters 前面部分继承KPConv,不要改
         ############
 
         # Current radius of convolution and feature dimension

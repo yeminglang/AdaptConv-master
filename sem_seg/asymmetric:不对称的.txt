@@ -1,0 +1,4 @@
+featue2 没有用到
+joint 唯一一次用到是在第一次adapt_simple
+neighb_inds[:,0]被视作是中心点
+如何做到降采样的：靠stride,当出现stride时，n_q比n_s小，提取的点会变少。

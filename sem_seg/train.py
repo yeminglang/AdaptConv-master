@@ -38,7 +38,8 @@ TRAIN_NAME = __file__.split('.')[0]
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, default='', help='description')
 parser.add_argument('--gpu_idx', type=int, default=0, help='set < 0 to use CPU')
-parser.add_argument('--dataset', type=str, default='./data/Stanford3dDataset_v1.2/', help='Path to S3DIS.')
+# parser.add_argument('--dataset', type=str, default='./data/Stanford3dDataset_v1.2/', help='Path to S3DIS.')
+parser.add_argument('--dataset', type=str, default='/media/yeminglang/TOSHIBA EXT/Stanford3dDataset_for_APconv', help='Path to S3DIS.')
 
 args = parser.parse_args()
 
@@ -99,14 +100,15 @@ class S3DISConfig(Config):
                     'unary']
 
     # convolutional feature
-    adaptive_feature = 'xyz'
+    # adaptive_feature = 'xyz'
+    adaptive_feature = 'xyz2_feat2'
     first_adaptive_feature = 'xyz_joint'
 
     # Radius of the input sphere
-    in_radius = 1.5
+    in_radius = 1.2 # 改，本来1.5
 
     # Size of the first subsampling grid in meter
-    first_subsampling_dl = 0.03
+    first_subsampling_dl = 0.06
 
     # Radius of convolution in "number grid cell". (2.5 is the standard value)
     conv_radius = 2.5
@@ -136,7 +138,7 @@ class S3DISConfig(Config):
     grad_clip_norm = 100.0
 
     # Number of batch
-    batch_num = 6
+    batch_num = 2
 
     # Number of steps per epochs
     epoch_steps = 500
@@ -188,7 +190,7 @@ def main():
     ###############
 
     # Choose here if you want to start training from a previous snapshot (None for new training)
-    previous_training_path = ''
+    previous_training_path = '/home/yeminglang/project/AdaptConv-master/sem_seg/train'
 
     # Choose index of checkpoint to start from. If None, uses the latest chkp
     chkp_idx = None
@@ -349,7 +351,8 @@ class ModelTrainer:
         # Path of the result folder
         if config.saving:
             if config.saving_path is None:
-                config.saving_path = join('results', TRAIN_NAME if args.name == '' else args.name)
+                #config.saving_path = join('results', TRAIN_NAME if args.name == '' else args.name)
+                config.saving_path = time.strftime('results/Log_%Y-%m-%d_%H-%M-%S', time.gmtime())
             if not exists(config.saving_path):
                 makedirs(config.saving_path)
             config.save()

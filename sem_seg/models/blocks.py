@@ -1,4 +1,3 @@
-
 import time
 import math
 import torch
@@ -6,7 +5,7 @@ import torch.nn as nn
 from torch.nn.parameter import Parameter
 from torch.nn.init import kaiming_uniform_
 
-from utils.ply import write_ply
+#from utils.ply import write_ply
 
 # ----------------------------------------------------------------------------------------------------------------------
 #
@@ -22,6 +21,8 @@ def gather(x, idx, method=2):
     :param idx: indexing with shape [n_1, ..., n_m]
     :param method: Choice of the method
     :return: x[idx] with shape [n_1, ..., n_m, D_1, ... D_d]
+
+    根据idx的索引从x中找出对应的点
     """
 
     if method == 0:
@@ -71,6 +72,7 @@ def closest_pool(x, inds):
     x = torch.cat((x, torch.zeros_like(x[:1, :])), 0)
 
     # Get features for each pooling location [n2, d]
+    # 这里inds[:, 0]是一个一维tensor（最邻近的邻居的索引是0，因此只提取0即可），长度为n2
     return gather(x, inds[:, 0])
 
 
@@ -88,7 +90,7 @@ def max_pool(x, inds):
     # Get all features for each pooling location [n2, max_num, d]
     pool_features = gather(x, inds)
 
-    # Pool the maximum [n2, d]
+    # Pool the maximum [n2, d] 对按索引取出的点，按特征维度做最大池化
     max_features, _ = torch.max(pool_features, 1)
     return max_features
 
@@ -117,14 +119,16 @@ def global_average(x, batch_lengths):
 
 
 def get_graph_feature(x, idx, feat_mode='none'):
-    # x: (n_supports, num_dims), idx: (n_queries, k)
+    # x: (n_supports, num_dims),
+    # idx: (n_queries, k)
     n_supports, num_dims = x.size()
     n_queries, k = idx.size()
 
-    feature = x[idx,:] # (n_queries, k, num_dims)
+    feature = x[idx,:]  # (n_queries, k, num_dims)
     if feat_mode == 'asym':
+        # 在n_supports个点中提取n_queries个点（idx[:,0]）
         x1 = x[idx[:,0], :] # (n_queries, num_dims)
-        x1 = x1.view(n_queries, 1, num_dims).repeat(1, k, 1)
+        x1 = x1.view(n_queries, 1, num_dims).repeat(1, k, 1) # (n_queries, k, num_dims)
         feature = torch.cat((feature-x1, x1), dim=2).contiguous() # (n_queries, k, num_dims*2)
 
     return feature
@@ -142,10 +146,13 @@ class AdaptiveConv(nn.Module):
         super(AdaptiveConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.feat_channels = feat_channels
+        self.feat_channels = feat_channels  # 在普通卷积中=hidden_dim，在第一层(simple)卷积中=in_dim
         self.feat_mode = feat_mode
-        self.strided = strided
+        self.strided = strided  # 只在判定通道时用到
 
+        # 不同模式下feat_channels的个数。
+        # 在train文件中，普通的是卷积adaptive_feature = 'xyz'
+        # 在train文件中，第一层的卷积的是first_adaptive_feature = 'xyz_joint'
         if self.feat_mode == 'asym':
             self.in_channels *= 2
             self.feat_channels *= 2
@@ -167,14 +174,20 @@ class AdaptiveConv(nn.Module):
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.1)
 
     def forward(self, q_points, s_points, neighb_inds, feat):
-        # s_points: (n_supports, 3), q_points: (n_queries, 3), feat: (n_supports, feat_channels), neighb_inds: (n_queries, k)
+        # s_points: (n_supports, 3),
+        # q_points: (n_queries, 3),
+        # neighb_inds: (n_queries, k),邻居点的地址
+        # feat: (n_supports, feat_channels),
         n_supports, _ = s_points.size()
-        n_queries, k = neighb_inds.size()
+        n_queries, k = neighb_inds.size()  # 邻居点地址[n_queries,K] neighb_inds[:,0]被视作是中心点
 
+        '''坐标和特征各加一行'''
         # Add a fake point in the last row for shadow neighbors
-        s_points = torch.cat((s_points, torch.zeros_like(s_points[:1, :])), 0) # (n_supports+1, 3)
+        s_points = torch.cat((s_points, torch.zeros_like(s_points[:1, :])), 0) # (n_supports+1, 3) 拼接，0表示dim=0
         # Add a zero feature for shadow neighbors
         feat = torch.cat((feat, torch.zeros_like(feat[:1, :])), 0) # (n_supports+1, feat_channels)
+
+        '''对所有点，提取n_queries个点的k个邻居'''
         x = get_graph_feature(s_points, idx=neighb_inds, feat_mode=self.feat_mode) # (n_queries, k, in_channels)
         y = get_graph_feature(feat, idx=neighb_inds, feat_mode=self.feat_mode) # (n_queries, k, feat_channels)
         #x = x - q_points.unsqueeze(1)
@@ -182,43 +195,55 @@ class AdaptiveConv(nn.Module):
         if 'xyz' in self.feat_mode:
             # asymmetric feature
             if 'xyz2' in self.feat_mode and not self.strided:
-                q_points = q_points.unsqueeze(1).repeat(1, k, 1)
+                q_points = q_points.unsqueeze(1).repeat(1, k, 1) # (n_queries, k, in_channels)
+                '''这里是xj-xi,xi'''
                 x = torch.cat((x-q_points, q_points), dim=2) # (n_queries, k, in_channels*2)
             else:
-                x = x - q_points.unsqueeze(1)
+                x = x - q_points.unsqueeze(1)  # (n_queries, k, in_channels)
 
-            # zeros out-ranged points
+            # zeros out-ranged points 将超出范围的点归零
             out_ranged = (neighb_inds.view(-1) == int(s_points.shape[0] - 1))
-            last_dim = x.shape[-1]
+            '''这里返回一个neighb_inds.view(-1)长度的向量，每个元素是true/false
+            如果neighb_inds.view(-1)中有和int(s_points.shape[0] - 1))相同的元素，将被标为true
+            '''
+            last_dim = x.shape[-1]  # 最后一维维度（3 或者 in_channels*2）
             x = x.view(n_queries*k, last_dim)
             x[out_ranged, :] = torch.zeros_like(x[:1, :])
             x = x.view(n_queries, k, last_dim).contiguous()
         else:
             x = x - q_points.unsqueeze(1)
 
+
         if 'feat2' in self.feat_mode and not self.strided:
             # asymmetric feature
-            y_center = feat[neighb_inds[:,0], :] # (n_queries, feat_channels)
+            y_center = feat[neighb_inds[:,0], :] # (n_queries, feat_channels) neighb_inds[:,0]被视作是中心点！！！
             y_center = y_center.unsqueeze(1).repeat(1, k, 1) # (n_queries, k, feat_channels)
+            '''这里是yj-yi,yi'''
             y = torch.cat((y-y_center, y_center), dim=2) # (n_queries, k, feat_channels*2)
+
 
         # feat+points
         if 'joint' in self.feat_mode:
             y = torch.cat((x, y), dim=2)
 
         # compute kernels weights
-        y = y.permute(2, 0, 1).unsqueeze(0) # (bs, feat_channels, n_queries, k)
+        y = y.permute(2, 0, 1).unsqueeze(0) # (bs, feat_channels, n_queries, k)  [B, C, H, W]
         kernel = self.conv0(y) # (bs, out_channels, n_queries, k)
         kernel = self.leaky_relu(self.bn0(kernel))
-        kernel = self.conv1(kernel) # (bs, in*out, n_queries, k)
+        kernel = self.conv1(kernel) # (bs, in*out, n_queries, k) 这里把通道调整为in*out方便下面拆成in*out
         kernel = kernel.permute(0, 2, 3, 1).view(1, n_queries, k, self.out_channels, self.in_channels) # (bs, n_queries, k, out, in)
 
         # convolving
         x = x.unsqueeze(0) # (bs, n_queries, k, in_channels)
         x = x.unsqueeze(4) # (bs, n_queries, k, in_channels, 1)
+        '''
+        (bs, n_queries, k, out, in) * 
+        (bs, n_queries, k, in, 1) = (bs, n_queries, k, out, 1), 其中只有(out, in)*(in, 1)
+        '''
         x = torch.matmul(kernel, x).squeeze(4) # (bs, n_queries, k, out_channels)
         x = x.permute(0, 3, 1, 2).contiguous() # (bs, out_channels, n_queries, k)
 
+        # 按照论文要求这非线性激活
         x = self.leaky_relu(self.bn1(x))
         x = x.max(dim=-1, keepdim=False)[0] # (bs, out_channels, n_queries)
         x = x.permute(0, 2, 1).squeeze(0).contiguous() # (n_queries, out_channels)
@@ -232,7 +257,7 @@ class AdaptResnetBottleneckBlock(nn.Module):
         """
         Initialize a resnet bottleneck block.
         :param in_dim: dimension input features
-        :param out_dim: dimension input features
+        :param out_dim: dimension output features
         :param radius: current radius of convolution
         :param config: parameters
         """
@@ -279,7 +304,10 @@ class AdaptResnetBottleneckBlock(nn.Module):
         return
 
     def forward(self, features, batch):
-
+        """
+        q_pts和s_pts是两组点，分别与list中储存的两组点对应
+        list[0]是s_pts，list[1]是q_pts
+        """
         if 'strided' in self.block_name:
             q_pts = batch.points[self.layer_ind + 1]
             s_pts = batch.points[self.layer_ind]
@@ -367,7 +395,7 @@ class AdaptSimpleBlock(nn.Module):
 
 # ----------------------------------------------------------------------------------------------------------------------
 #
-#           Graph Conv class
+#           Graph Conv class 分割任务中用不到
 #       \******************/
 #
 
@@ -762,7 +790,7 @@ class MaxPoolBlock(nn.Module):
         return max_pool(x, batch.pools[self.layer_ind + 1])
 
 
-class S3DISConfig():
+class S3DISConfig():  # 这个只是用于该文件下main函数测试，并没有实际用
 
     conv_radius = 2.5
 
@@ -771,7 +799,8 @@ class S3DISConfig():
     use_batch_norm = True
     batch_norm_momentum = 0.02
 
-    adaptive_feature = 'none'
+    # adaptive_feature = 'none'
+    adaptive_feature = 'xyz2_feat2'
     first_adaptive_feature = 'xyz_joint'
 
 class TempBatch():
@@ -780,7 +809,7 @@ class TempBatch():
 
 
 if __name__ == '__main__':
-    block_name = 'graph_simple'
+    block_name = 'adapt_resnetb'
     in_dim = 64
     out_dim = in_dim*2 if 'strided' in block_name else in_dim
     radius = 0.03

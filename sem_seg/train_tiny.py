@@ -38,7 +38,7 @@ TRAIN_NAME = __file__.split('.')[0]
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, default='', help='description')
 parser.add_argument('--gpu_idx', type=int, default=0, help='set < 0 to use CPU')
-parser.add_argument('--dataset', type=str, default='/home/data4/zhr/S3DIS/data/Stanford3dDataset_v1.2/', help='Path to S3DIS.')
+parser.add_argument('--dataset', type=str, default='/media/yeminglang/TOSHIBA EXT/Stanford3dDataset_for_APconv', help='Path to S3DIS.')
 
 args = parser.parse_args()
 
@@ -103,7 +103,7 @@ class S3DISConfig(Config):
     first_adaptive_feature = 'xyz_joint'
 
     # Radius of the input sphere
-    in_radius = 1.5
+    in_radius = 0.6 # 改1.5
 
     # Size of the first subsampling grid in meter
     first_subsampling_dl = 0.03
@@ -136,7 +136,7 @@ class S3DISConfig(Config):
     grad_clip_norm = 100.0
 
     # Number of batch
-    batch_num = 2 # to reduce batch size
+    batch_num = 16 # to reduce batch size
 
     # Number of steps per epochs
     epoch_steps = 500
@@ -188,7 +188,7 @@ def main():
     ###############
 
     # Choose here if you want to start training from a previous snapshot (None for new training)
-    previous_training_path = ''
+    previous_training_path = '/home/yeminglang/project/AdaptConv-master/sem_seg/train_tiny'  # 这个要pwd获得的完整的路径
 
     # Choose index of checkpoint to start from. If None, uses the latest chkp
     chkp_idx = None
@@ -196,7 +196,7 @@ def main():
 
         # Find all snapshot in the chosen training folder
         chkp_path = os.path.join('results', previous_training_path, 'checkpoints')
-        chkps = [f for f in os.listdir(chkp_path) if f[:4] == 'chkp']
+        chkps = [f for f in os.listdir(chkp_path) if f[-5:] == 'chkp']
 
         # Find which snapshot to restore
         if chkp_idx is None:
